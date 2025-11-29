@@ -1,0 +1,164 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  CloudFormation template to create an S3 bucket, IAM roles and policies
+  granting S3 access, and a bucket policy that allows AWS Bedrock service
+  to access the bucket.
+
+Parameters:
+  BucketName:
+    Type: String
+    Description: Name for the S3 bucket to create. Must be globally unique.
+  EnableVersioning:
+    Type: String
+    AllowedValues: ["Enabled", "Suspended"]
+    Default: "Enabled"
+    Description: Enable or suspend versioning for the S3 bucket.
+
+Resources:
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref BucketName
+      VersioningConfiguration:
+        Status: !Ref EnableVersioning
+
+  S3BucketPublicAccessBlock:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref S3Bucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement: []
+
+  # Managed policy granting S3 access scoped to the bucket and its objects
+  S3AccessManagedPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub '${AWS::StackName}-S3AccessPolicy'
+      Description: 'Managed policy granting read/write access to the stack S3 bucket'
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - s3:ListBucket
+            Resource: !Sub 'arn:aws:s3:::${BucketName}'
+          - Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:PutObject
+              - s3:DeleteObject
+            Resource: !Sub 'arn:aws:s3:::${BucketName}/*'
+
+  # Role that Bedrock service can assume (if you want Bedrock to assume a role)
+  BedrockServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${AWS::StackName}-BedrockServiceRole'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: bedrock.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /
+      ManagedPolicyArns: []
+      Policies: []
+      # Attach the managed policy created above
+      # Note: CloudFormation does not support ManagedPolicyArns referencing a ManagedPolicy in same template until created,
+      # so attach by adding an inline policy referencing the same actions.
+    Metadata:
+      Note: 'Bedrock role has inline policy attached below via BedrockRolePolicy resource.'
+
+  BedrockRolePolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub '${AWS::StackName}-BedrockInlineS3Policy'
+      Roles:
+        - !Ref BedrockServiceRole
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - s3:ListBucket
+            Resource: !Sub 'arn:aws:s3:::${BucketName}'
+          - Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:PutObject
+              - s3:DeleteObject
+            Resource: !Sub 'arn:aws:s3:::${BucketName}/*'
+
+  # Example application role (e.g., Lambda/EC2) that can access the bucket
+  AppServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${AWS::StackName}-AppServiceRole'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /
+      ManagedPolicyArns: []
+
+  AppRolePolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub '${AWS::StackName}-AppInlineS3Policy'
+      Roles:
+        - !Ref AppServiceRole
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - s3:ListBucket
+            Resource: !Sub 'arn:aws:s3:::${BucketName}'
+          - Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:PutObject
+              - s3:DeleteObject
+            Resource: !Sub 'arn:aws:s3:::${BucketName}/*'
+
+  # Bucket policy to allow Bedrock service principal access to the bucket
+  S3BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref S3Bucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowBedrockServiceAccess
+            Effect: Allow
+            Principal:
+              Service: bedrock.amazonaws.com
+            Action:
+              - s3:GetObject
+              - s3:PutObject
+              - s3:ListBucket
+            Resource:
+              - !Sub 'arn:aws:s3:::${BucketName}'
+              - !Sub 'arn:aws:s3:::${BucketName}/*'
+            # Optional: restrict by account to reduce blast radius. Uncomment to enforce.
+            # Condition:
+            #   StringEquals:
+            #     aws:SourceAccount: !Ref AWS::AccountId
+
+Outputs:
+  BucketName:
+    Description: Name of the created S3 bucket
+    Value: !Ref BucketName
+
+  BedrockRoleArn:
+    Description: ARN of the role that Bedrock can assume (if required)
+    Value: !GetAtt BedrockServiceRole.Arn
+
+  AppRoleArn:
+    Description: ARN of the application role with S3 access
+    Value: !GetAtt AppServiceRole.Arn
