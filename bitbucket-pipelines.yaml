@@ -1,0 +1,39 @@
+image: node:18
+
+options:
+  size: 2x       # bump if builds are heavy
+  max-time: 30   # minutes
+
+pipelines:
+  default:
+    - step:
+        name: Checkout & Unit Tests
+        caches:
+          - node
+        script:
+          - npm ci
+          - npm test
+    - step:
+        name: SonarQube Analysis
+        caches:
+          - node
+        script:
+          # expects SONAR_HOST_URL, SONAR_LOGIN (token), and optionally SONAR_PROJECT_KEY set in Repository variables
+          - npm ci --prefer-offline
+          - npx sonarqube-scanner \
+              -Dsonar.projectKey=$SONAR_PROJECT_KEY \
+              -Dsonar.sources=. \
+              -Dsonar.host.url=$SONAR_HOST_URL \
+              -Dsonar.login=$SONAR_LOGIN \
+              -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
+    - step:
+        name: Build
+        caches:
+          - node
+        script:
+          - npm ci --prefer-offline
+          - npm run build
+
+definitions:
+  caches:
+    node: ~/.npm

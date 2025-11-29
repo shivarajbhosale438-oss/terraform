@@ -1,0 +1,155 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Bedrock batch inference over S3 using Step Functions
+
+Parameters:
+  ModelId:
+    Type: String
+    Description: Bedrock model ID (e.g., arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-3-sonnet-20240229-v1:0)
+  InputBucketName:
+    Type: String
+    Description: Existing S3 bucket with input payloads (one file per inference)
+  OutputBucketName:
+    Type: String
+    Description: S3 bucket to write inference outputs
+  InputPrefix:
+    Type: String
+    Default: ""
+    Description: Optional prefix in the input bucket to limit which objects are processed
+
+Resources:
+  OutputBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref OutputBucketName
+      VersioningConfiguration:
+        Status: Enabled
+
+  StateMachineLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/vendedlogs/states/bedrock-batch-${AWS::StackName}
+      RetentionInDays: 30
+
+  StateMachineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess
+      Policies:
+        - PolicyName: BedrockBatchPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                Resource: !Sub arn:aws:s3:::${OutputBucketName}/*
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                Resource: "*" # scope to specific model ARN if desired
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogDelivery
+                  - logs:GetLogDelivery
+                  - logs:UpdateLogDelivery
+                  - logs:DeleteLogDelivery
+                  - logs:ListLogDeliveries
+                  - logs:PutResourcePolicy
+                  - logs:DescribeResourcePolicies
+                  - logs:DescribeLogGroups
+                Resource: "*"
+
+  BedrockBatchStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      RoleArn: !GetAtt StateMachineRole.Arn
+      LoggingConfiguration:
+        Destinations:
+          - CloudWatchLogsLogGroup:
+              LogGroupArn: !GetAtt StateMachineLogGroup.Arn
+        IncludeExecutionData: true
+        Level: ALL
+      DefinitionString:
+        Fn::Sub: |
+          {
+            "Comment": "S3 -> Bedrock batch -> S3",
+            "StartAt": "ListObjects",
+            "States": {
+              "ListObjects": {
+                "Type": "Task",
+                "Resource": "arn:aws:states:::aws-sdk:s3:listObjectsV2",
+                "Parameters": {
+                  "Bucket": "${InputBucketName}",
+                  "Prefix": "${InputPrefix}"
+                },
+                "ResultPath": "$.List",
+                "Next": "ForEachObject"
+              },
+              "ForEachObject": {
+                "Type": "Map",
+                "ItemsPath": "$.List.Contents",
+                "MaxConcurrency": 5,
+                "Iterator": {
+                  "StartAt": "GetObject",
+                  "States": {
+                    "GetObject": {
+                      "Type": "Task",
+                      "Resource": "arn:aws:states:::aws-sdk:s3:getObject",
+                      "Parameters": {
+                        "Bucket": "${InputBucketName}",
+                        "Key.$": "$.Key"
+                      },
+                      "ResultPath": "$.InputObject",
+                      "Next": "InvokeModel"
+                    },
+                    "InvokeModel": {
+                      "Type": "Task",
+                      "Resource": "arn:aws:states:::aws-sdk:bedrockruntime:invokeModel",
+                      "Parameters": {
+                        "ModelId": "${ModelId}",
+                        "ContentType": "application/json",
+                        "Accept": "application/json",
+                        "Body.$": "$.InputObject.Body"
+                      },
+                      "ResultSelector": {
+                        "ModelOutput.$": "States.StringToJson(States.Base64Decode($.Body))"
+                      },
+                      "ResultPath": "$.Inference",
+                      "Next": "WriteOutput"
+                    },
+                    "WriteOutput": {
+                      "Type": "Task",
+                      "Resource": "arn:aws:states:::aws-sdk:s3:putObject",
+                      "Parameters": {
+                        "Bucket": "${OutputBucketName}",
+                        "Key.$": "States.Format('outputs/{}.json', $.InputObject.Key)",
+                        "Body.$": "States.JsonToString($.Inference.ModelOutput)",
+                        "ContentType": "application/json"
+                      },
+                      "ResultPath": null,
+                      "End": true
+                    }
+                  }
+                },
+                "ResultPath": null,
+                "End": true
+              }
+            }
+          }
+
+Outputs:
+  StateMachineArn:
+    Description: ARN of the Bedrock batch state machine
+    Value: !Ref BedrockBatchStateMachine
+  OutputBucketNameValue:
+    Description: Output bucket name
+    Value: !Ref OutputBucketName
