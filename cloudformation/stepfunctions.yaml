@@ -1,0 +1,36 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Step Functions with an execution role
+
+Resources:
+  SFNRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: demo-sfn-exec
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: invoke-lambda
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: "*"
+
+  StateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: demo-sfn
+      RoleArn: !GetAtt SFNRole.Arn   # needs PassRole
+      DefinitionString: |
+        {
+          "StartAt": "Success",
+          "States": {
+            "Success": { "Type": "Succeed" }
+          }
+        }

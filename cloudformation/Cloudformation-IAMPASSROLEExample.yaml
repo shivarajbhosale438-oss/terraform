@@ -1,0 +1,42 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Execution role for CloudFormation
+
+Resources:
+  CfnExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: demo-cfn-exec
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudformation.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: allow-pass-specific-roles
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: PassLambda
+                Effect: Allow
+                Action: iam:PassRole
+                Resource: arn:aws:iam::123456789012:role/demo-lambda-exec
+                Condition:
+                  StringEquals: { "iam:PassedToService": "lambda.amazonaws.com" }
+              - Sid: PassEcsRoles
+                Effect: Allow
+                Action: iam:PassRole
+                Resource:
+                  - arn:aws:iam::123456789012:role/demo-ecs-execution
+                  - arn:aws:iam::123456789012:role/demo-ecs-task
+                Condition:
+                  StringEquals: { "iam:PassedToService": "ecs-tasks.amazonaws.com" }
+              - Sid: PassSfn
+                Effect: Allow
+                Action: iam:PassRole
+                Resource: arn:aws:iam::123456789012:role/demo-sfn-exec
+                Condition:
+                  StringEquals: { "iam:PassedToService": "states.amazonaws.com" }
+
+        # (Add whatever create/update permissions CFN needs for your resources)
