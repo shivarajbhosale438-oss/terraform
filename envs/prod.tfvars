@@ -1,0 +1,10 @@
+env = "prod"
+project = "demo-app"
+aws_region = "ap-south-1"
+vpc_cidr = "10.20.0.0/16"
+azs = ["ap-south-1a","ap-south-1b"]
+public_subnets = ["10.20.1.0/24","10.20.2.0/24"]
+private_subnets = ["10.20.101.0/24","10.20.102.0/24"]
+bucket_suffix = "prod"
+allowed_ssh_cidr = "203.0.113.0/24"
+ami_id = "ami-0abcdef1234567890" # replace with a valid AMI in ap-south-1
